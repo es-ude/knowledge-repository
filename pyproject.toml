@@ -1,7 +1,10 @@
 [project]
-name = "knowledge-repository"
+name = "krepo"
 version = "0.1.0"
-description = "Add your description here"
+description = "A light-weight knowledge repository used to store neural network architecture and platform prameters."
 readme = "README.md"
+authors = [
+
+]
 requires-python = ">=3.11"
 dependencies = []
