@@ -4,7 +4,15 @@ version = "0.1.0"
 description = "A light-weight knowledge repository used to store neural network architecture and platform prameters."
 readme = "README.md"
 authors = [
-
+    {name = "Dominik Sukic", email = "dominik.sukic@stud.uni-due.de"},
 ]
 requires-python = ">=3.11"
 dependencies = []
+
+[project.scripts]
+vbservice-client = "vbservice.client:main"
+vbservice-server = "vbservice.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
