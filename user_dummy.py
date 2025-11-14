@@ -14,26 +14,23 @@ search_conf = {
     "type": "grid",
     "range": [1, 10],
 }
-run_tags = [
-    {
-        "key": "hw_platform",
-        "value": "pico",
-    },
-]
 
-# Start run needs the configs
+
+run_tags = {
+        "hw_platform": "pico"
+}
+
 krepo.start_run(
     nas_config=nas_conf,
     search_space_config=search_conf,
     tags=run_tags,
-    run_name="test run2"
+    run_name="test run3"
 )
 
-# Log intermediate
 krepo.log_metrics({"accuracy": 0.8}, step=1)
 krepo.log_metrics({"accuracy": 0.85}, step=2)
+krepo.log_metrics({"accuracy": 0.87}, step=4)
 
-# Log final
 model_architecture = {
     "1_layer" : {
         "linear": {
@@ -42,7 +39,7 @@ model_architecture = {
             }
         }
     }
-krepo.log_model_architecture("CNN", model_architecture)
+krepo.log_model("CNN", model_architecture)
 krepo.log_metrics({"final_accuracy": 0.9})
 
 krepo.end_run()

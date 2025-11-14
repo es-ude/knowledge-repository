@@ -1,5 +1,8 @@
 import mlflow
-from typing import List, Dict
+from typing import List, Dict, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import torch.nn
 
 
 class KnowledgeRepoAPI:
@@ -27,8 +30,8 @@ class KnowledgeRepoAPI:
 
         self.current_run = mlflow.start_run(experiment_id=self.experiment_id, run_name=run_name)
 
-        log_run_configs(nas_config, search_space_config)
-        set_run_tags(tags)
+        _log_run_configs(nas_config, search_space_config)
+        _set_run_tags(tags)
 
         return self.current_run
 
@@ -36,7 +39,8 @@ class KnowledgeRepoAPI:
         if self.current_run:
             mlflow.log_metrics(metrics, step=step)
 
-    def log_model_architecture(self, model_type: str, model_architecture: Dict[str, dict]):
+    def log_model(self, model_type: str, model_architecture: Dict[str, dict], model: torch.nn.Module):
+    # Save torch.nn module object
         if not self.current_run:
             raise RuntimeError("Run not started. Use start_run() first.")
 
@@ -49,11 +53,11 @@ class KnowledgeRepoAPI:
             self.current_run = None
 
 
-def log_run_configs(nas_config: dict, search_space_config: dict):
+def _log_run_configs(nas_config: dict, search_space_config: dict):
     mlflow.log_dict(nas_config, "nas_config.json")
     mlflow.log_dict(search_space_config, "search_space_config.json")
 
 
-def set_run_tags(tags: List[Dict[str, str]]):
-    for tag in tags:
-        mlflow.set_tag(tag["key"], tag["value"])
+def _set_run_tags(tags: Dict[str, str]):
+    for key, value in tags.items():
+        mlflow.set_tag(key, value)
