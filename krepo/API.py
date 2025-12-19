@@ -1,5 +1,7 @@
 import mlflow
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+import json
+import os
 
 if TYPE_CHECKING:
     from torch.nn import Module as TorchModule
@@ -23,7 +25,7 @@ class KnowledgeRepoAPI:
         Save following logs under this experiment
         """
         mlflow.set_experiment(experiment_name)
-        experiment = mlflow.get_experiment(experiment_name)
+        experiment = mlflow.get_experiment_by_name(experiment_name)
         if experiment:
             self.experiment_id = experiment.experiment_id
             self.nas_config = nas_config
@@ -56,7 +58,7 @@ class KnowledgeRepoAPI:
         mlflow.set_tag(key, value)
 
 
-    def set_tags(self, tags: Dict[str, str]) -> None:
+    def set_tags(self, tags: Dict[str, Any]) -> None:
         if not self.current_run:
             raise RuntimeError("Run not started. Use start_run() first.")
 
@@ -82,15 +84,101 @@ class KnowledgeRepoAPI:
             mlflow.pytorch.log_model(model)
 
     # -------- Estimator Methods --------
-    def get_training_data_for_estimator(self, target_metric: str, hw_platform: str, tag: List[str]) -> List[Tuple[Dict, Dict]]:
+    def get_training_data_for_estimator(self, target_metric: str, hw_platform: str, tags: Dict[str, Any] | None = None) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
         """
         Returns all the model_architectures and target metrics that
         correspond to the given hardware platform and model type
         """
-        pass
+        filter_parts = [f'tags."hw_platform" = "{hw_platform}"']
 
-    def save_estimator(self, estimator: TorchModule, hw_platform: str, tags: List[str], metric: str) -> None:
-        pass
+        if tags:
+            for key, value in tags.items():
+                filter_parts.append(f'tags."{key}" = "{value}"')
 
-    def load_estimator(self, hw_platform: str, tags: List[str], metric: str) -> TorchModule:
-        pass
+        filter_string = ' AND '.join(filter_parts)
+
+        # FIXME: Should all experiments be searched or only current experiment?
+        runs = mlflow.search_runs(
+            experiment_ids=[self.experiment_id],
+            # search_all_experiments=True,
+            filter_string=filter_string,
+        )
+
+        training_data: List[Tuple[Dict, Dict]] = []
+        client = mlflow.tracking.MlflowClient()
+
+        for _, run in runs.iterrows():
+            run_id = run["run_id"]
+            metric_value = run[f"metrics.{target_metric}"]
+            if metric_value is None:
+                continue
+
+            try:
+                artifact_path = "model_architecture.json"
+                file_path = client.download_artifacts(run_id=run_id, path=artifact_path)
+
+                # FIXME: Downloading, Reading and Loading artifacts takes time.
+                #        Considering storing model_architecture as tag instead?
+                with open(file_path, 'r') as f:
+                    model_architecture = json.load(f)
+
+                target_metric_dict = {target_metric: metric_value}
+                training_data.append((model_architecture, target_metric_dict))
+
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+
+            except Exception as e:
+                print(f"Skipping run '{run_id}' due to error: {e}")
+                continue
+
+        return training_data
+
+
+    def save_estimator(self, estimator: TorchModule, hw_platform: str, metric: str, tags: Dict[str, Any] | None = None) -> None:
+        if not self.current_run:
+            raise RuntimeError("Run not started. Use start_run() first.")
+
+        self.set_tag("model_type", "estimator")
+        self.set_tag("metric", metric)
+        self.set_tag("hw_platform", hw_platform)
+
+        if tags:
+            self.set_tags(tags)
+
+        mlflow.pytorch.log_model(
+            pytorch_model=estimator,
+            artifact_path="estimator_model"
+        )
+        print(f"Estimator saved to MLflow run {self.current_run.info.run_id} under 'estimator_model'")
+
+    def load_estimator(self, hw_platform: str, metric: str, tags: Dict[str, Any] | None = None) -> TorchModule:
+        if not self.experiment_id:
+            raise RuntimeError("Experiment not set. Call set_experiment() first.")
+
+        filter_parts = [
+            f'tags."hw_platform" = "{hw_platform}"',
+            f'tags."model_type" = "estimator"',
+            f'tags."metric" = "{metric}"'
+        ]
+
+        if tags:
+            for key, value in tags.items():
+                filter_parts.append(f'tags."{key}" = "{value}"')
+
+        filter_string = " AND ".join(filter_parts)
+
+        runs = mlflow.search_runs(
+            experiment_ids=[self.experiment_id],
+            filter_string=filter_string,
+            order_by=["start_time DESC"],
+            max_results=1
+        )
+
+        if not runs.empty:
+            run_id = runs.iloc[0]["run_id"]
+            model_uri = f"runs:/{run_id}/estimator_model"
+            estimator = mlflow.pytorch.load_model(model_uri)
+            return estimator
+        else:
+            raise LookupError(f"No estimator found matching criteria: HW='{hw_platform}', Metric='{metric}', Tags='{tags}'")

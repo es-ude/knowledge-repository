@@ -1,6 +1,19 @@
 from krepo.API import KnowledgeRepoAPI
-from model_dummy import MyTorchModule
+import torch.nn as nn
+import mlflow
 
+class MyTorchModule(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super(MyTorchModule, self).__init__()
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        out = self.fc1(x)
+        out = self.relu(out)
+        out = self.fc2(out)
+        return out
 
 krepo: KnowledgeRepoAPI = KnowledgeRepoAPI(
     tracking_uri="http://localhost:2035",
@@ -46,4 +59,10 @@ krepo.log_model(model_params, model_architecture, model)
 
 krepo.log_metrics({"final_accuracy": 0.9})
 
+
+training_data = krepo.get_training_data_for_estimator("accuracy", "pico")
 krepo.end_run()
+
+print("test1")
+estimator = krepo.load_estimator("pico", "accuracy")
+print("test2")
