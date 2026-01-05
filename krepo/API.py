@@ -97,10 +97,8 @@ class KnowledgeRepoAPI:
 
         filter_string = ' AND '.join(filter_parts)
 
-        # FIXME: Should all experiments be searched or only current experiment?
         runs = mlflow.search_runs(
-            experiment_ids=[self.experiment_id],
-            # search_all_experiments=True,
+            search_all_experiments=True,
             filter_string=filter_string,
         )
 
@@ -116,9 +114,9 @@ class KnowledgeRepoAPI:
             try:
                 artifact_path = "model_architecture.json"
                 file_path = client.download_artifacts(run_id=run_id, path=artifact_path)
-
+                print("Test")
                 # FIXME: Downloading, Reading and Loading artifacts takes time.
-                #        Considering storing model_architecture as tag instead?
+                #        Considering storing model_architecture as tag instead? (Considering SQL)
                 with open(file_path, 'r') as f:
                     model_architecture = json.load(f)
 
@@ -135,22 +133,35 @@ class KnowledgeRepoAPI:
         return training_data
 
 
-    def save_estimator(self, estimator: TorchModule, hw_platform: str, metric: str, tags: Dict[str, Any] | None = None) -> None:
-        if not self.current_run:
-            raise RuntimeError("Run not started. Use start_run() first.")
+    def save_estimator(self, estimator: TorchModule, hw_platform: str, metric: str, validation_loss: float, tags: Dict[str, Any] | None = None) -> str:
+        """
+        Save this estimator to a new run and return a UID for easy access using krepo.API.get_model_by_uid()
+        """
+        if self.current_run:
+            self.end_run()
+
+        self.start_run("Estimator")
 
         self.set_tag("model_type", "estimator")
         self.set_tag("metric", metric)
         self.set_tag("hw_platform", hw_platform)
 
+        self.log_metrics(
+            {"validation_loss": validation_loss}
+        )
+
         if tags:
             self.set_tags(tags)
 
-        mlflow.pytorch.log_model(
+        model_info: mlflow.models.model.ModelInfo = mlflow.pytorch.log_model(
             pytorch_model=estimator,
             artifact_path="estimator_model"
         )
         print(f"Estimator saved to MLflow run {self.current_run.info.run_id} under 'estimator_model'")
+        model_uid = model_info.model_id
+
+        return model_uid
+
 
     def load_estimator(self, hw_platform: str, metric: str, tags: Dict[str, Any] | None = None) -> TorchModule:
         if not self.experiment_id:
@@ -171,7 +182,7 @@ class KnowledgeRepoAPI:
         runs = mlflow.search_runs(
             experiment_ids=[self.experiment_id],
             filter_string=filter_string,
-            order_by=["start_time DESC"],
+            order_by=["metrics.validation_loss ASC"],
             max_results=1
         )
 
@@ -182,3 +193,8 @@ class KnowledgeRepoAPI:
             return estimator
         else:
             raise LookupError(f"No estimator found matching criteria: HW='{hw_platform}', Metric='{metric}', Tags='{tags}'")
+
+
+def get_model_by_uid(uid: str) -> TorchModule:
+    model: TorchModule = mlflow.get_logged_model(uid)
+    return model
