@@ -1,5 +1,8 @@
 import mlflow
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+import subprocess
+import platform
+import shutil
 import json
 import os
 
@@ -10,13 +13,20 @@ else:
 
 
 class KnowledgeRepoAPI:
-    def __init__(self, tracking_uri: str = "http://localhost"):
-        mlflow.set_tracking_uri(tracking_uri)
+    def __init__(self, server_ip: str, server_port: int):
+        self.tracking_uri = f"http://localhost:{server_port}"
+        self.server_ip = server_ip
+        self.server_port = server_port
+
         self.experiment_id = None
         self.current_run = None
         self.nas_config = None
         self.search_space_config = None
         self.hw_platform = None
+
+        self._forward_port()
+        mlflow.set_tracking_uri(self.tracking_uri)
+
 
     def set_experiment(self, experiment_name: str, nas_config: dict, search_space_config: dict, hw_platform: str) -> None:
         """
@@ -83,13 +93,19 @@ class KnowledgeRepoAPI:
         if model:
             mlflow.pytorch.log_model(model)
 
+    @staticmethod
+    def load_model_from_uid(uid: str) -> TorchModule:
+        model: TorchModule = mlflow.get_logged_model(uid)
+        return model
+
     # -------- Estimator Methods --------
-    def get_training_data_for_estimator(self, target_metric: str, hw_platform: str, tags: Dict[str, Any] | None = None) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    @staticmethod
+    def get_training_data_for_estimator(target_metric: str, hw_platform: str, tags: Dict[str, Any] | None = None) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
         """
         Returns all the model_architectures and target metrics that
         correspond to the given hardware platform and model type
         """
-        filter_parts = [f'tags."hw_platform" = "{hw_platform}"']
+        filter_parts = [f'tags."hw_platform" = "{hw_platform}"', 'tags."model_type" != "estimator"']
 
         if tags:
             for key, value in tags.items():
@@ -114,7 +130,7 @@ class KnowledgeRepoAPI:
             try:
                 artifact_path = "model_architecture.json"
                 file_path = client.download_artifacts(run_id=run_id, path=artifact_path)
-                print("Test")
+                print(f"Run ID: {run_id}, Artifact Path: {artifact_path}")
                 # FIXME: Downloading, Reading and Loading artifacts takes time.
                 #        Considering storing model_architecture as tag instead? (Considering SQL)
                 with open(file_path, 'r') as f:
@@ -180,21 +196,70 @@ class KnowledgeRepoAPI:
         filter_string = " AND ".join(filter_parts)
 
         runs = mlflow.search_runs(
-            experiment_ids=[self.experiment_id],
+            search_all_experiments=True,
             filter_string=filter_string,
             order_by=["metrics.validation_loss ASC"],
             max_results=1
         )
+        print(runs.iloc[0])
+        print(runs.iloc[0]['artifact_uri'])
 
         if not runs.empty:
             run_id = runs.iloc[0]["run_id"]
             model_uri = f"runs:/{run_id}/estimator_model"
-            estimator = mlflow.pytorch.load_model(model_uri)
+            estimator = mlflow.sklearn.load_model(model_uri)
+            # estimator = mlflow.pytorch.load_model(model_uri)
             return estimator
         else:
             raise LookupError(f"No estimator found matching criteria: HW='{hw_platform}', Metric='{metric}', Tags='{tags}'")
 
+    def _forward_port(self):
+        ssh_command = "ssh -Y -L {}:localhost:{} krepo@{}".format(
+            self.server_port,
+            self.server_port,
+            self.server_ip,
+        )
+        if platform_is("Linux"):
+            terminal = _get_linux_terminal()
+            if terminal:
+                subprocess.Popen([terminal, "-e", ssh_command])
+            else:
+                raise EnvironmentError("No supported terminal emulator found on this system.")
+        elif platform_is("Windows"):
+            subprocess.Popen(ssh_command, creationflags=subprocess.CREATE_NEW_CONSOLE)
+        elif platform_is("macOS"):
+            osa_command = f'''
+            tell application "Terminal"
+                do script "{ssh_command}"
+                activate
+            end tell
+            '''
+            subprocess.Popen(["osascript", "-e", osa_command])
 
-def get_model_by_uid(uid: str) -> TorchModule:
-    model: TorchModule = mlflow.get_logged_model(uid)
-    return model
+
+def platform_is(system: str) -> bool:
+    current_system = platform.system().lower()
+    requested_system = system.lower()
+    if current_system == requested_system:
+        return True
+    if requested_system == "macos" and current_system == "darwin":
+        return True
+    return False
+
+
+# noinspection SpellCheckingInspection
+def _get_linux_terminal():
+    terminals = [
+        "x-terminal-emulator",
+        "gnome-terminal",
+        "konsole",
+        "xfce4-terminal",
+        "lxterminal",
+        "xterm",
+        "terminator",
+        "mate-terminal"
+    ]
+    for term in terminals:
+        if shutil.which(term):
+            return term
+    return None

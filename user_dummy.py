@@ -16,7 +16,8 @@ class MyTorchModule(nn.Module):
         return out
 
 krepo: KnowledgeRepoAPI = KnowledgeRepoAPI(
-    tracking_uri="http://localhost:2035",
+    server_ip = "65.108.38.237",
+    server_port = 2035,
 )
 
 nas_conf = {
@@ -29,7 +30,7 @@ search_conf = {
 }
 
 krepo.set_experiment(
-    experiment_name="Test_NAS_Experiment",
+    experiment_name="Test_NAS_Experiment4",
     nas_config=nas_conf,
     search_space_config=search_conf,
     hw_platform="pico"
@@ -57,12 +58,13 @@ model_architecture = {
     }
 krepo.log_model(model_params, model_architecture, model)
 
-krepo.log_metrics({"final_accuracy": 0.9})
-
-
-training_data = krepo.get_training_data_for_estimator("accuracy", "pico")
 krepo.end_run()
 
+training_data = krepo.get_training_data_for_estimator("accuracy", "pico")
+print(training_data)
+krepo.start_run("run 2")
+krepo.save_estimator(estimator=model, hw_platform="pico", metric="accuracy", validation_loss=0.3)
+krepo.end_run()
 print("test1")
 estimator = krepo.load_estimator("pico", "accuracy")
 print("test2")
