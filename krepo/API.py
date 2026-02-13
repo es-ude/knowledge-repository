@@ -2,6 +2,7 @@ import mlflow
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 import subprocess
 import platform
+import pickle
 import shutil
 import json
 import os
@@ -149,7 +150,7 @@ class KnowledgeRepoAPI:
         return training_data
 
 
-    def save_estimator(self, estimator: TorchModule, hw_platform: str, metric: str, validation_loss: float, tags: Dict[str, Any] | None = None) -> str:
+    def save_estimator(self, estimator: TorchModule, hw_platform: str, metric: str, validation_loss: float, tags: Dict[str, Any] | None = None) -> str | None:
         """
         Save this estimator to a new run and return a UID for easy access using krepo.API.get_model_by_uid()
         """
@@ -169,29 +170,39 @@ class KnowledgeRepoAPI:
         if tags:
             self.set_tags(tags)
 
-        model_info: mlflow.models.model.ModelInfo = mlflow.pytorch.log_model(
+        model_info = self.save_estimator_with_mlflow(estimator)
+
+        if model_info:
+            model_uid = model_info.model_id
+        else:
+            model_uid = None
+
+        print(f"Estimator saved to MLflow run {self.current_run.info.run_id} under 'estimator_model'")
+        return model_uid
+
+    @staticmethod
+    def save_estimator_with_mlflow(estimator) -> mlflow.models.model.ModelInfo:
+        model_info = mlflow.pytorch.log_model(
             pytorch_model=estimator,
             artifact_path="estimator_model"
         )
-        print(f"Estimator saved to MLflow run {self.current_run.info.run_id} under 'estimator_model'")
-        model_uid = model_info.model_id
-
-        return model_uid
-
+        return model_info
 
     def load_estimator(self, hw_platform: str, metric: str, tags: Dict[str, Any] | None = None) -> TorchModule:
         if not self.experiment_id:
             raise RuntimeError("Experiment not set. Call set_experiment() first.")
 
+        all_experiments = [exp.experiment_id for exp in mlflow.search_experiments()]
+
         filter_parts = [
-            f'tags."hw_platform" = "{hw_platform}"',
-            f'tags."model_type" = "estimator"',
-            f'tags."metric" = "{metric}"'
+            f"tags.hw_platform = '{hw_platform}'",
+            "tags.model_type = 'estimator'",
+            f"tags.metric = '{metric}'"
         ]
 
         if tags:
             for key, value in tags.items():
-                filter_parts.append(f'tags."{key}" = "{value}"')
+                filter_parts.append(f"tags.{key} = '{value}'")
 
         filter_string = " AND ".join(filter_parts)
 
@@ -201,15 +212,26 @@ class KnowledgeRepoAPI:
             order_by=["metrics.validation_loss ASC"],
             max_results=1
         )
-        print(runs.iloc[0])
-        print(runs.iloc[0]['artifact_uri'])
 
-        if not runs.empty:
+        all_models = mlflow.search_logged_models(
+            experiment_ids=all_experiments,
+            output_format="list"
+        )
+
+        if all_models and not runs.empty:
             run_id = runs.iloc[0]["run_id"]
-            model_uri = f"runs:/{run_id}/estimator_model"
-            estimator = mlflow.sklearn.load_model(model_uri)
-            # estimator = mlflow.pytorch.load_model(model_uri)
+
+            for model in all_models:
+                if model.source_run_id == run_id:
+                    model_uri = model.artifact_location
+                    break
+            else:
+                raise LookupError(f"No model found matching criteria: {filter_parts[0]}")
+
+            estimator = mlflow.pytorch.load_model(model_uri)
+
             return estimator
+
         else:
             raise LookupError(f"No estimator found matching criteria: HW='{hw_platform}', Metric='{metric}', Tags='{tags}'")
 
@@ -247,7 +269,7 @@ def platform_is(system: str) -> bool:
     return False
 
 
-# noinspection SpellCheckingInspection
+# noinspection SpellCheckingInspection,PyDeprecation
 def _get_linux_terminal():
     terminals = [
         "x-terminal-emulator",

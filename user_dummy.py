@@ -2,6 +2,8 @@ from krepo.API import KnowledgeRepoAPI
 import torch.nn as nn
 import mlflow
 
+import torch
+
 class MyTorchModule(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
         super(MyTorchModule, self).__init__()
@@ -30,7 +32,7 @@ search_conf = {
 }
 
 krepo.set_experiment(
-    experiment_name="Test_NAS_Experiment4",
+    experiment_name="Test_NAS_Experiment",
     nas_config=nas_conf,
     search_space_config=search_conf,
     hw_platform="pico"
@@ -56,6 +58,8 @@ model_architecture = {
             }
         }
     }
+
+
 krepo.log_model(model_params, model_architecture, model)
 
 krepo.end_run()
@@ -65,6 +69,22 @@ print(training_data)
 krepo.start_run("run 2")
 krepo.save_estimator(estimator=model, hw_platform="pico", metric="accuracy", validation_loss=0.3)
 krepo.end_run()
-print("test1")
+
+print("Loading Estimator...")
 estimator = krepo.load_estimator("pico", "accuracy")
-print("test2")
+print(type(estimator))
+
+# orig_state = model.state_dict()
+# loaded_state = estimator.state_dict()
+#
+# match = True
+# for key in orig_state:
+#     if not torch.equal(orig_state[key], loaded_state[key]):
+#         match = False
+#         break
+#
+# if match:
+#     print("Success")
+# else:
+#     print("failed")
+print("Done")

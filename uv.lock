@@ -851,7 +851,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mlflow", specifier = ">=3.7.0" },
+    { name = "mlflow", specifier = "==3.7.0" },
     { name = "torch", specifier = ">=2.9.1" },
 ]
 
