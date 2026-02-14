@@ -2,7 +2,6 @@ import mlflow
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 import subprocess
 import platform
-import pickle
 import shutil
 import json
 import os
@@ -171,11 +170,7 @@ class KnowledgeRepoAPI:
             self.set_tags(tags)
 
         model_info = self.save_estimator_with_mlflow(estimator)
-
-        if model_info:
-            model_uid = model_info.model_id
-        else:
-            model_uid = None
+        model_uid = model_info.model_id
 
         print(f"Estimator saved to MLflow run {self.current_run.info.run_id} under 'estimator_model'")
         return model_uid
@@ -189,10 +184,23 @@ class KnowledgeRepoAPI:
         return model_info
 
     def load_estimator(self, hw_platform: str, metric: str, tags: Dict[str, Any] | None = None) -> TorchModule:
+        """
+            Retrieves and loads the best-performing PyTorch estimator model
+            based on hardware platform, metric type and optional tags.
+
+            Args:
+                hw_platform: The target hardware architecture
+                metric: Performance metric that the estimator targets
+                tags: Optional dictionary of additional tags
+
+            Returns:
+                TorchModule: The loaded PyTorch model
+
+            It may look like there are better ways of loading the estimator,
+            but I tried them and this is the only one that works.
+        """
         if not self.experiment_id:
             raise RuntimeError("Experiment not set. Call set_experiment() first.")
-
-        all_experiments = [exp.experiment_id for exp in mlflow.search_experiments()]
 
         filter_parts = [
             f"tags.hw_platform = '{hw_platform}'",
@@ -213,10 +221,7 @@ class KnowledgeRepoAPI:
             max_results=1
         )
 
-        all_models = mlflow.search_logged_models(
-            experiment_ids=all_experiments,
-            output_format="list"
-        )
+        all_models = self.get_all_models()
 
         if all_models and not runs.empty:
             run_id = runs.iloc[0]["run_id"]
@@ -234,6 +239,32 @@ class KnowledgeRepoAPI:
 
         else:
             raise LookupError(f"No estimator found matching criteria: HW='{hw_platform}', Metric='{metric}', Tags='{tags}'")
+
+    def get_model_by_uid(self, uid: str) -> TorchModule:
+        """
+            Load a PyTorch model from its UID.
+            The UID of an estimator model can be retrieved by calling self.save_estimator().
+        """
+        all_models = self.get_all_models()
+        for logged_model in all_models:
+            if logged_model.model_id == uid:
+                artifact_location = logged_model.artifact_location
+                model = mlflow.pytorch.load_model(artifact_location)
+
+                return model
+        else:
+            raise LookupError(f"No model found matching UID: {uid}")
+
+    @staticmethod
+    def get_all_models():
+        all_experiments = [exp.experiment_id for exp in mlflow.search_experiments()]
+
+        all_models = mlflow.search_logged_models(
+            experiment_ids=all_experiments,
+            output_format="list"
+        )
+
+        return all_models
 
     def _forward_port(self):
         ssh_command = "ssh -Y -L {}:localhost:{} krepo@{}".format(

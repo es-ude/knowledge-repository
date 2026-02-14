@@ -66,13 +66,16 @@ krepo.end_run()
 
 training_data = krepo.get_training_data_for_estimator("accuracy", "pico")
 print(training_data)
-krepo.start_run("run 2")
-krepo.save_estimator(estimator=model, hw_platform="pico", metric="accuracy", validation_loss=0.3)
+estimator_uid = krepo.save_estimator(estimator=model, hw_platform="pico", metric="accuracy", validation_loss=0.3)
 krepo.end_run()
 
 print("Loading Estimator...")
 estimator = krepo.load_estimator("pico", "accuracy")
 print(type(estimator))
+
+# Get Estimator UID
+estimator_from_uid = krepo.get_model_by_uid(estimator_uid)
+print(type(estimator_from_uid))
 
 # orig_state = model.state_dict()
 # loaded_state = estimator.state_dict()
