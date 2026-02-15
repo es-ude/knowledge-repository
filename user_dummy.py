@@ -1,21 +1,5 @@
 from krepo.API import KnowledgeRepoAPI
-import torch.nn as nn
-import mlflow
-
-import torch
-
-class MyTorchModule(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size):
-        super(MyTorchModule, self).__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(hidden_size, output_size)
-
-    def forward(self, x):
-        out = self.fc1(x)
-        out = self.relu(out)
-        out = self.fc2(out)
-        return out
+from model_dummy import MyTorchModule
 
 krepo: KnowledgeRepoAPI = KnowledgeRepoAPI(
     server_ip = "65.108.38.237",
@@ -32,7 +16,7 @@ search_conf = {
 }
 
 krepo.set_experiment(
-    experiment_name="Test_NAS_Experiment",
+    experiment_name="Test_NAS_Experiment6",
     nas_config=nas_conf,
     search_space_config=search_conf,
     hw_platform="pico"
@@ -65,7 +49,6 @@ krepo.log_model(model_params, model_architecture, model)
 krepo.end_run()
 
 training_data = krepo.get_training_data_for_estimator("accuracy", "pico")
-print(training_data)
 estimator_uid = krepo.save_estimator(estimator=model, hw_platform="pico", metric="accuracy", validation_loss=0.3)
 krepo.end_run()
 

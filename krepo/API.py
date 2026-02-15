@@ -1,10 +1,9 @@
 import mlflow
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any
 import subprocess
 import platform
 import shutil
 import json
-import os
 
 if TYPE_CHECKING:
     from torch.nn import Module as TorchModule
@@ -28,7 +27,9 @@ class KnowledgeRepoAPI:
         mlflow.set_tracking_uri(self.tracking_uri)
 
 
-    def set_experiment(self, experiment_name: str, nas_config: dict, search_space_config: dict, hw_platform: str) -> None:
+    def set_experiment(
+        self, experiment_name: str, nas_config: dict, search_space_config: dict, hw_platform: str
+    ) -> None:
         """
         Specify the current experiment
         Create/GET Experiment ID
@@ -68,7 +69,7 @@ class KnowledgeRepoAPI:
         mlflow.set_tag(key, value)
 
 
-    def set_tags(self, tags: Dict[str, Any]) -> None:
+    def set_tags(self, tags: dict[str, Any]) -> None:
         if not self.current_run:
             raise RuntimeError("Run not started. Use start_run() first.")
 
@@ -76,22 +77,35 @@ class KnowledgeRepoAPI:
             mlflow.set_tag(key, value)
 
 
-    def log_metrics(self, metrics: Dict, step=0) -> None:
+    def log_metrics(self, metrics: dict, step=0) -> None:
         if not self.current_run:
             raise RuntimeError("Run not started. Use start_run() first.")
 
         mlflow.log_metrics(metrics, step=step)
 
 
-    def log_model(self, parameters: Dict, model_architecture: Dict, model: TorchModule | None = None) -> None:
+    def log_model(self, parameters: dict, model_architecture: dict, model: TorchModule | None = None) -> str | None:
+        """
+            Log model parameters and architecture.
+            Optional: Log pytorch model object.
+
+            Returns:
+                  Model UID if a model object has been logged.
+                  None if no model object has been logged.
+        """
         if not self.current_run:
             raise RuntimeError("Run not started. Use start_run() first.")
 
         mlflow.log_params(parameters)
         mlflow.log_dict(model_architecture, "model_architecture.json")
+        mlflow.set_tag("model_type", "default")
+        mlflow.set_tag("model_architecture", json.dumps(model_architecture))
 
         if model:
-            mlflow.pytorch.log_model(model)
+            model_info = mlflow.pytorch.log_model(model)
+            return model_info.model_id
+
+        return None
 
     @staticmethod
     def load_model_from_uid(uid: str) -> TorchModule:
@@ -100,10 +114,12 @@ class KnowledgeRepoAPI:
 
     # -------- Estimator Methods --------
     @staticmethod
-    def get_training_data_for_estimator(target_metric: str, hw_platform: str, tags: Dict[str, Any] | None = None) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    def get_training_data_for_estimator(
+        target_metric: str, hw_platform: str, tags: dict[str, Any] | None = None
+    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
         """
-        Returns all the model_architectures and target metrics that
-        correspond to the given hardware platform and model type
+            Returns all the model_architectures and target metrics that
+            correspond to the given hardware platform and model type.
         """
         filter_parts = [f'tags."hw_platform" = "{hw_platform}"', 'tags."model_type" != "estimator"']
 
@@ -118,38 +134,25 @@ class KnowledgeRepoAPI:
             filter_string=filter_string,
         )
 
-        training_data: List[Tuple[Dict, Dict]] = []
-        client = mlflow.tracking.MlflowClient()
+        training_data: list[tuple[dict, dict]] = []
 
         for _, run in runs.iterrows():
-            run_id = run["run_id"]
             metric_value = run[f"metrics.{target_metric}"]
-            if metric_value is None:
+            architecture_json = run.get("tags.model_architecture")
+            if metric_value is None or architecture_json is None:
                 continue
 
-            try:
-                artifact_path = "model_architecture.json"
-                file_path = client.download_artifacts(run_id=run_id, path=artifact_path)
-                print(f"Run ID: {run_id}, Artifact Path: {artifact_path}")
-                # FIXME: Downloading, Reading and Loading artifacts takes time.
-                #        Considering storing model_architecture as tag instead? (Considering SQL)
-                with open(file_path, 'r') as f:
-                    model_architecture = json.load(f)
-
-                target_metric_dict = {target_metric: metric_value}
-                training_data.append((model_architecture, target_metric_dict))
-
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-
-            except Exception as e:
-                print(f"Skipping run '{run_id}' due to error: {e}")
-                continue
+            model_architecture = json.loads(architecture_json)
+            target_metric_dict = {target_metric: metric_value}
+            training_data.append((model_architecture, target_metric_dict))
 
         return training_data
 
 
-    def save_estimator(self, estimator: TorchModule, hw_platform: str, metric: str, validation_loss: float, tags: Dict[str, Any] | None = None) -> str | None:
+    def save_estimator(
+        self, estimator: TorchModule, hw_platform: str, metric: str,
+        validation_loss: float, tags: dict[str, Any] | None = None
+    ) -> str | None:
         """
         Save this estimator to a new run and return a UID for easy access using krepo.API.get_model_by_uid()
         """
@@ -179,11 +182,11 @@ class KnowledgeRepoAPI:
     def save_estimator_with_mlflow(estimator) -> mlflow.models.model.ModelInfo:
         model_info = mlflow.pytorch.log_model(
             pytorch_model=estimator,
-            artifact_path="estimator_model"
+            name="estimator_model"
         )
         return model_info
 
-    def load_estimator(self, hw_platform: str, metric: str, tags: Dict[str, Any] | None = None) -> TorchModule:
+    def load_estimator(self, hw_platform: str, metric: str, tags: dict[str, Any] | None = None) -> TorchModule:
         """
             Retrieves and loads the best-performing PyTorch estimator model
             based on hardware platform, metric type and optional tags.
@@ -223,22 +226,23 @@ class KnowledgeRepoAPI:
 
         all_models = self.get_all_models()
 
-        if all_models and not runs.empty:
-            run_id = runs.iloc[0]["run_id"]
+        if not all_models or runs.empty:
+            raise LookupError(
+                f"No estimator found matching criteria: HW='{hw_platform}', Metric='{metric}', Tags='{tags}'"
+            )
 
-            for model in all_models:
-                if model.source_run_id == run_id:
-                    model_uri = model.artifact_location
-                    break
-            else:
-                raise LookupError(f"No model found matching criteria: {filter_parts[0]}")
+        run_id = runs.iloc[0]["run_id"]
 
-            estimator = mlflow.pytorch.load_model(model_uri)
-
-            return estimator
-
+        for model in all_models:
+            if model.source_run_id == run_id:
+                model_uri = model.artifact_location
+                break
         else:
-            raise LookupError(f"No estimator found matching criteria: HW='{hw_platform}', Metric='{metric}', Tags='{tags}'")
+            raise LookupError(f"No model found matching criteria: {filter_parts[0]}")
+
+        estimator = mlflow.pytorch.load_model(model_uri)
+
+        return estimator
 
     def get_model_by_uid(self, uid: str) -> TorchModule:
         """
