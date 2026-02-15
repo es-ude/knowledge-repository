@@ -1,8 +1,6 @@
 import mlflow
 from typing import TYPE_CHECKING, Any
 import subprocess
-import platform
-import shutil
 import json
 
 if TYPE_CHECKING:
@@ -23,6 +21,7 @@ class KnowledgeRepoAPI:
         self.search_space_config = None
         self.hw_platform = None
 
+        self._ssh_process = None
         self._forward_port()
         mlflow.set_tracking_uri(self.tracking_uri)
 
@@ -271,52 +270,16 @@ class KnowledgeRepoAPI:
         return all_models
 
     def _forward_port(self):
-        ssh_command = "ssh -Y -L {}:localhost:{} krepo@{}".format(
-            self.server_port,
-            self.server_port,
-            self.server_ip,
+        if self._ssh_process:
+            return
+
+        self._ssh_process = subprocess.Popen(
+            [
+                "ssh", "-N",
+                "-L", f"{self.server_port}:localhost:{self.server_port}",
+                f"krepo@{self.server_ip}",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
-        if platform_is("Linux"):
-            terminal = _get_linux_terminal()
-            if terminal:
-                subprocess.Popen([terminal, "-e", ssh_command])
-            else:
-                raise EnvironmentError("No supported terminal emulator found on this system.")
-        elif platform_is("Windows"):
-            subprocess.Popen(ssh_command, creationflags=subprocess.CREATE_NEW_CONSOLE)
-        elif platform_is("macOS"):
-            osa_command = f'''
-            tell application "Terminal"
-                do script "{ssh_command}"
-                activate
-            end tell
-            '''
-            subprocess.Popen(["osascript", "-e", osa_command])
-
-
-def platform_is(system: str) -> bool:
-    current_system = platform.system().lower()
-    requested_system = system.lower()
-    if current_system == requested_system:
-        return True
-    if requested_system == "macos" and current_system == "darwin":
-        return True
-    return False
-
-
-# noinspection SpellCheckingInspection,PyDeprecation
-def _get_linux_terminal():
-    terminals = [
-        "x-terminal-emulator",
-        "gnome-terminal",
-        "konsole",
-        "xfce4-terminal",
-        "lxterminal",
-        "xterm",
-        "terminator",
-        "mate-terminal"
-    ]
-    for term in terminals:
-        if shutil.which(term):
-            return term
-    return None
