@@ -117,8 +117,9 @@ class KnowledgeRepoAPI:
         target_metric: str, hw_platform: str, tags: dict[str, Any] | None = None
     ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
         """
-            Returns all the model_architectures and target metrics that
-            correspond to the given hardware platform and model type.
+            Returns all the model_architectures and target metrics that/init
+            correspond to the given hardware platform and model type,
+            in the form of: [(model_architecture_dict, {metric: value}), ...]
         """
         filter_parts = [f'tags."hw_platform" = "{hw_platform}"', 'tags."model_type" != "estimator"']
 
@@ -174,7 +175,6 @@ class KnowledgeRepoAPI:
         model_info = self.save_estimator_with_mlflow(estimator)
         model_uid = model_info.model_id
 
-        print(f"Estimator saved to MLflow run {self.current_run.info.run_id} under 'estimator_model'")
         return model_uid
 
     @staticmethod

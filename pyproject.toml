@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     "mlflow==3.7.0",
+    "pandas-stubs~=2.3.3",
     "torch>=2.9.1",
 ]
 
@@ -21,3 +22,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::FutureWarning:mlflow",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
