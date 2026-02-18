@@ -200,13 +200,13 @@ class TestEstimatorRoundTrip:
         )
         api.end_run()
 
-        loaded = api.get_model_by_uid(uid)
+        loaded = api.load_model_by_uid(uid)
         assert isinstance(loaded, nn.Module)
         assert torch.equal(original.linear.weight.data, loaded.linear.weight.data)
 
-    def test_get_model_by_uid_unknown_raises(self, api_with_experiment):
+    def test_load_model_by_uid_unknown_raises(self, api_with_experiment):
         with pytest.raises(LookupError, match="No model found matching UID"):
-            api_with_experiment.get_model_by_uid("nonexistent-uid")
+            api_with_experiment.load_model_by_uid("nonexistent-uid")
 
 
 class TestGetTrainingData:

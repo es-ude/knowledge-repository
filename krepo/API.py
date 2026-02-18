@@ -25,249 +25,7 @@ class KnowledgeRepoAPI:
         self._forward_port()
         mlflow.set_tracking_uri(self.tracking_uri)
 
-
-    def set_experiment(
-        self, experiment_name: str, nas_config: dict, search_space_config: dict, hw_platform: str
-    ) -> None:
-        """
-        Specify the current experiment
-        Create/GET Experiment ID
-        Save following logs under this experiment
-        """
-        mlflow.set_experiment(experiment_name)
-        experiment = mlflow.get_experiment_by_name(experiment_name)
-        if experiment:
-            self.experiment_id = experiment.experiment_id
-            self.nas_config = nas_config
-            self.search_space_config = search_space_config
-            self.hw_platform = hw_platform
-        else:
-            raise RuntimeError(f"Could not find or create experiment: {experiment_name}")
-
-    def start_run(self, run_name) -> None:
-        if not self.experiment_id:
-            raise RuntimeError("Experiment not set. Call set_experiment() first.")
-
-        self.end_run()
-        self.current_run = mlflow.start_run(experiment_id=self.experiment_id, run_name=run_name)
-
-        mlflow.log_dict(self.nas_config, "nas_config.json")
-        mlflow.log_dict(self.search_space_config, "search_space_config.json")
-
-        self.set_tag("hw_platform", self.hw_platform)
-
-    def end_run(self):
-        if self.current_run:
-            mlflow.end_run()
-            self.current_run = None
-
-    def set_tag(self, key: str, value: Any) -> None:
-        if not self.current_run:
-            raise RuntimeError("Run not started. Use start_run() first.")
-
-        mlflow.set_tag(key, value)
-
-
-    def set_tags(self, tags: dict[str, Any]) -> None:
-        if not self.current_run:
-            raise RuntimeError("Run not started. Use start_run() first.")
-
-        for key, value in tags.items():
-            mlflow.set_tag(key, value)
-
-
-    def log_metrics(self, metrics: dict, step=0) -> None:
-        if not self.current_run:
-            raise RuntimeError("Run not started. Use start_run() first.")
-
-        mlflow.log_metrics(metrics, step=step)
-
-
-    def log_model(self, parameters: dict, model_architecture: dict, model: TorchModule | None = None) -> str | None:
-        """
-            Log model parameters and architecture.
-            Optional: Log pytorch model object.
-
-            Returns:
-                  Model UID if a model object has been logged.
-                  None if no model object has been logged.
-        """
-        if not self.current_run:
-            raise RuntimeError("Run not started. Use start_run() first.")
-
-        mlflow.log_params(parameters)
-        mlflow.log_dict(model_architecture, "model_architecture.json")
-        mlflow.set_tag("model_type", "default")
-        mlflow.set_tag("model_architecture", json.dumps(model_architecture))
-
-        if model:
-            model_info = mlflow.pytorch.log_model(model)
-            return model_info.model_id
-
-        return None
-
-    @staticmethod
-    def load_model_from_uid(uid: str) -> TorchModule:
-        model: TorchModule = mlflow.get_logged_model(uid)
-        return model
-
-    # -------- Estimator Methods --------
-    @staticmethod
-    def get_training_data_for_estimator(
-        target_metric: str, hw_platform: str, tags: dict[str, Any] | None = None
-    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-        """
-            Returns all the model_architectures and target metrics that/init
-            correspond to the given hardware platform and model type,
-            in the form of: [(model_architecture_dict, {metric: value}), ...]
-        """
-        filter_parts = [f'tags."hw_platform" = "{hw_platform}"', 'tags."model_type" != "estimator"']
-
-        if tags:
-            for key, value in tags.items():
-                filter_parts.append(f'tags."{key}" = "{value}"')
-
-        filter_string = ' AND '.join(filter_parts)
-
-        runs = mlflow.search_runs(
-            search_all_experiments=True,
-            filter_string=filter_string,
-        )
-
-        training_data: list[tuple[dict, dict]] = []
-
-        for _, run in runs.iterrows():
-            metric_value = run[f"metrics.{target_metric}"]
-            architecture_json = run.get("tags.model_architecture")
-            if metric_value is None or architecture_json is None:
-                continue
-
-            model_architecture = json.loads(architecture_json)
-            target_metric_dict = {target_metric: metric_value}
-            training_data.append((model_architecture, target_metric_dict))
-
-        return training_data
-
-
-    def save_estimator(
-        self, estimator: TorchModule, hw_platform: str, metric: str,
-        validation_loss: float, tags: dict[str, Any] | None = None
-    ) -> str | None:
-        """
-        Save this estimator to a new run and return a UID for easy access using krepo.API.get_model_by_uid()
-        """
-        if self.current_run:
-            self.end_run()
-
-        self.start_run("Estimator")
-
-        self.set_tag("model_type", "estimator")
-        self.set_tag("metric", metric)
-        self.set_tag("hw_platform", hw_platform)
-
-        self.log_metrics(
-            {"validation_loss": validation_loss}
-        )
-
-        if tags:
-            self.set_tags(tags)
-
-        model_info = self.save_estimator_with_mlflow(estimator)
-        model_uid = model_info.model_id
-
-        return model_uid
-
-    @staticmethod
-    def save_estimator_with_mlflow(estimator) -> mlflow.models.model.ModelInfo:
-        model_info = mlflow.pytorch.log_model(
-            pytorch_model=estimator,
-            name="estimator_model"
-        )
-        return model_info
-
-    def load_estimator(self, hw_platform: str, metric: str, tags: dict[str, Any] | None = None) -> TorchModule:
-        """
-            Retrieves and loads the best-performing PyTorch estimator model
-            based on hardware platform, metric type and optional tags.
-
-            Args:
-                hw_platform: The target hardware architecture
-                metric: Performance metric that the estimator targets
-                tags: Optional dictionary of additional tags
-
-            Returns:
-                TorchModule: The loaded PyTorch model
-
-            It may look like there are better ways of loading the estimator,
-            but I tried them and this is the only one that works.
-        """
-        if not self.experiment_id:
-            raise RuntimeError("Experiment not set. Call set_experiment() first.")
-
-        filter_parts = [
-            f"tags.hw_platform = '{hw_platform}'",
-            "tags.model_type = 'estimator'",
-            f"tags.metric = '{metric}'"
-        ]
-
-        if tags:
-            for key, value in tags.items():
-                filter_parts.append(f"tags.{key} = '{value}'")
-
-        filter_string = " AND ".join(filter_parts)
-
-        runs = mlflow.search_runs(
-            search_all_experiments=True,
-            filter_string=filter_string,
-            order_by=["metrics.validation_loss ASC"],
-            max_results=1
-        )
-
-        all_models = self.get_all_models()
-
-        if not all_models or runs.empty:
-            raise LookupError(
-                f"No estimator found matching criteria: HW='{hw_platform}', Metric='{metric}', Tags='{tags}'"
-            )
-
-        run_id = runs.iloc[0]["run_id"]
-
-        for model in all_models:
-            if model.source_run_id == run_id:
-                model_uri = model.artifact_location
-                break
-        else:
-            raise LookupError(f"No model found matching criteria: {filter_parts[0]}")
-
-        estimator = mlflow.pytorch.load_model(model_uri)
-
-        return estimator
-
-    def get_model_by_uid(self, uid: str) -> TorchModule:
-        """
-            Load a PyTorch model from its UID.
-            The UID of an estimator model can be retrieved by calling self.save_estimator().
-        """
-        all_models = self.get_all_models()
-        for logged_model in all_models:
-            if logged_model.model_id == uid:
-                artifact_location = logged_model.artifact_location
-                model = mlflow.pytorch.load_model(artifact_location)
-
-                return model
-        else:
-            raise LookupError(f"No model found matching UID: {uid}")
-
-    @staticmethod
-    def get_all_models():
-        all_experiments = [exp.experiment_id for exp in mlflow.search_experiments()]
-
-        all_models = mlflow.search_logged_models(
-            experiment_ids=all_experiments,
-            output_format="list"
-        )
-
-        return all_models
+    # --- Connection ---
 
     def _forward_port(self):
         if self._ssh_process:
@@ -283,3 +41,193 @@ class KnowledgeRepoAPI:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+
+    # --- Experiment & Runs ---
+
+    def set_experiment(
+        self, experiment_name: str, nas_config: dict, search_space_config: dict, hw_platform: str
+    ) -> None:
+        """Create or retrieve the experiment and set it as the active context."""
+        mlflow.set_experiment(experiment_name)
+        experiment = mlflow.get_experiment_by_name(experiment_name)
+        if experiment:
+            self.experiment_id = experiment.experiment_id
+            self.nas_config = nas_config
+            self.search_space_config = search_space_config
+            self.hw_platform = hw_platform
+        else:
+            raise RuntimeError(f"Could not find or create experiment: {experiment_name}")
+
+    def start_run(self, run_name: str) -> None:
+        if not self.experiment_id:
+            raise RuntimeError("Experiment not set. Call set_experiment() first.")
+
+        self.end_run()
+        self.current_run = mlflow.start_run(experiment_id=self.experiment_id, run_name=run_name)
+
+        mlflow.log_dict(self.nas_config, "nas_config.json")
+        mlflow.log_dict(self.search_space_config, "search_space_config.json")
+        self.set_tag("hw_platform", self.hw_platform)
+
+    def end_run(self) -> None:
+        if self.current_run:
+            mlflow.end_run()
+            self.current_run = None
+
+    def set_tag(self, key: str, value: Any) -> None:
+        self._require_active_run()
+        mlflow.set_tag(key, value)
+
+    def set_tags(self, tags: dict[str, Any]) -> None:
+        self._require_active_run()
+        for key, value in tags.items():
+            mlflow.set_tag(key, value)
+
+    def log_metrics(self, metrics: dict, step: int = 0) -> None:
+        self._require_active_run()
+        mlflow.log_metrics(metrics, step=step)
+
+    def _require_active_run(self) -> None:
+        if not self.current_run:
+            raise RuntimeError("Run not started. Use start_run() first.")
+
+    # --- Model Logging ---
+
+    def log_model(self, parameters: dict, model_architecture: dict, model: TorchModule | None = None) -> str | None:
+        """
+        Log model parameters and architecture.
+        Optionally log a PyTorch model object.
+
+        Returns:
+            Model UID if a model object was logged, None otherwise.
+        """
+        self._require_active_run()
+
+        mlflow.log_params(parameters)
+        mlflow.log_dict(model_architecture, "model_architecture.json")
+        mlflow.set_tag("model_type", "default")
+        mlflow.set_tag("model_architecture", json.dumps(model_architecture))
+
+        if model:
+            model_info = mlflow.pytorch.log_model(model)
+            return model_info.model_id
+
+        return None
+
+    def load_model_by_uid(self, uid: str) -> TorchModule:
+        """Load and return a PyTorch model by its UID."""
+        for logged_model in self.get_all_models():
+            if logged_model.model_id == uid:
+                return mlflow.pytorch.load_model(logged_model.artifact_location)
+        raise LookupError(f"No model found matching UID: {uid}")
+
+    @staticmethod
+    def get_all_models():
+        all_experiments = [exp.experiment_id for exp in mlflow.search_experiments()]
+        return mlflow.search_logged_models(
+            experiment_ids=all_experiments,
+            output_format="list"
+        )
+
+    # --- Estimator ---
+
+    @staticmethod
+    def get_training_data_for_estimator(
+        target_metric: str, hw_platform: str, tags: dict[str, Any] | None = None
+    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        """
+        Returns all model architectures and target metrics corresponding to
+        the given hardware platform, in the form of:
+        [(model_architecture_dict, {metric: value}), ...]
+        """
+        filter_parts = [
+            f'tags."hw_platform" = "{hw_platform}"',
+            'tags."model_type" != "estimator"',
+        ]
+        if tags:
+            for key, value in tags.items():
+                filter_parts.append(f'tags."{key}" = "{value}"')
+
+        runs = mlflow.search_runs(
+            search_all_experiments=True,
+            filter_string=" AND ".join(filter_parts),
+        )
+
+        training_data: list[tuple[dict, dict]] = []
+        for _, run in runs.iterrows():
+            metric_value = run[f"metrics.{target_metric}"]
+            architecture_json = run.get("tags.model_architecture")
+            if metric_value is None or architecture_json is None:
+                continue
+            training_data.append((json.loads(architecture_json), {target_metric: metric_value}))
+
+        return training_data
+
+    def save_estimator(
+        self, estimator: TorchModule, hw_platform: str, metric: str,
+        validation_loss: float, tags: dict[str, Any] | None = None
+    ) -> str:
+        """
+        Save an estimator to a new run and return its UID.
+        The UID can later be used with load_model_by_uid().
+        """
+        if self.current_run:
+            self.end_run()
+
+        self.start_run("Estimator")
+        self.set_tags({
+            "model_type": "estimator",
+            "metric": metric,
+            "hw_platform": hw_platform,
+        })
+        self.log_metrics({"validation_loss": validation_loss})
+
+        if tags:
+            self.set_tags(tags)
+
+        model_info = mlflow.pytorch.log_model(pytorch_model=estimator, name="estimator_model")
+        return model_info.model_id
+
+    def load_estimator(self, hw_platform: str, metric: str, tags: dict[str, Any] | None = None) -> TorchModule:
+        """
+            Retrieve and load the best-performing estimator for the given hardware platform and metric.
+        """
+        if not self.experiment_id:
+            raise RuntimeError("Experiment not set. Call set_experiment() first.")
+
+        run_id = self._find_best_estimator_run_id(hw_platform, metric, tags)
+        model_uri = self._find_model_uri_for_run(run_id)
+        return mlflow.pytorch.load_model(model_uri)
+
+    def _find_best_estimator_run_id(
+        self, hw_platform: str, metric: str, tags: dict[str, Any] | None
+    ) -> str:
+        filter_parts = [
+            f"tags.hw_platform = '{hw_platform}'",
+            "tags.model_type = 'estimator'",
+            f"tags.metric = '{metric}'",
+        ]
+        if tags:
+            for key, value in tags.items():
+                filter_parts.append(f"tags.{key} = '{value}'")
+
+        runs = mlflow.search_runs(
+            search_all_experiments=True,
+            filter_string=" AND ".join(filter_parts),
+            order_by=["metrics.validation_loss ASC"],
+            max_results=1,
+        )
+
+        all_models = self.get_all_models()
+        if not all_models or runs.empty:
+            raise LookupError(
+                f"No estimator found matching criteria: HW='{hw_platform}', Metric='{metric}', Tags='{tags}'"
+            )
+
+        return runs.iloc[0]["run_id"]
+
+    def _find_model_uri_for_run(self, run_id: str) -> str:
+        for model in self.get_all_models():
+            if model.source_run_id == run_id:
+                return model.artifact_location
+        raise LookupError(f"No model found for run_id: {run_id}")

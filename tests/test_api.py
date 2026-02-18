@@ -307,7 +307,7 @@ class TestLoadEstimator:
         m.mlflow.pytorch.load_model.assert_called_once_with("s3://model")
 
 
-class TestGetModelByUid:
+class TestLoadModelByUid:
     def test_returns_model_for_matching_uid(self, mocks_with_experiment):
         m = mocks_with_experiment
         m.mlflow.search_experiments.return_value = [SimpleNamespace(experiment_id="e1")]
@@ -318,7 +318,7 @@ class TestGetModelByUid:
         sentinel = object()
         m.mlflow.pytorch.load_model.return_value = sentinel
 
-        result = m.api.get_model_by_uid("uid-2")
+        result = m.api.load_model_by_uid("uid-2")
 
         assert result is sentinel
         m.mlflow.pytorch.load_model.assert_called_once_with("s3://m2")
@@ -329,14 +329,5 @@ class TestGetModelByUid:
         m.mlflow.search_logged_models.return_value = []
 
         with pytest.raises(LookupError, match="No model found matching UID"):
-            m.api.get_model_by_uid("nonexistent")
-
-
-class TestLoadModelFromUid:
-    def test_delegates_to_mlflow(self, mocks):
-        sentinel = object()
-        mocks.mlflow.get_logged_model.return_value = sentinel
-
-        result = KnowledgeRepoAPI.load_model_from_uid("uid-5")
-
-        assert result is sentinel
+            m.api.load_model_by_uid("nonexistent")
+            
